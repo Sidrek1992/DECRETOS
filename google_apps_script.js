@@ -1,127 +1,152 @@
-
-// SGP CLOUD - SISTEMA DE GENERACIÓN DE DECRETOS 2026
-// VERSIÓN REFORZADA PARA SINCRONIZACIÓN EN TIEMPO REAL
+/**
+ * SGP CLOUD - MOTOR UNIFICADO v4.1 (Versión Estable)
+ * Soporta: Lectura de Datos, Sincronización y Generación de PDFs/Documentos.
+ * Corregido: Error de permisos Drive (migrado a standard DriveApp).
+ */
 
 const TEMPLATE_DOC_ID = '1BvJanZb0936sPvV0oEZw-E0sro_02ibm_BFQuXa6F24';
 const FOLDER_DESTINATION_ID = '1sX722eJuMnnrhqPO-zJF9ccCqlktLDo8';
+const DEFAULT_SHEET_ID = '1BmMABAHk8ZgpUlXzsyI33qQGtsk5mrKnf5qzgQp4US0';
 
 /**
- * Función principal que recibe las peticiones POST.
+ * LECTURA DE DATOS (doGet)
+ * Lee los datos desde la fila 2 (la fila 1 es encabezado)
+ * Soporta tanto el sheet de decretos (15 cols) como el de empleados (5 cols)
  */
-function doPost(e) {
+function doGet(e) {
   try {
-    if (!e || !e.postData || !e.postData.contents) {
-      return createJsonResponse({ success: false, error: "Petición sin datos en el cuerpo" });
-    }
+    var sheetId = (e && e.parameter && e.parameter.sheetId) ? e.parameter.sheetId : DEFAULT_SHEET_ID;
+    var isEmployees = (e && e.parameter && e.parameter.type === 'employees');
 
-    var payload = JSON.parse(e.postData.contents);
-    
-    // Si la petición trae un sheetId, es para sincronizar la base de datos de decretos
-    if (payload.sheetId) {
-      return handleSpreadsheetSync(payload);
-    }
-    
-    // De lo contrario, es para generar un documento individual
-    return handleDocumentCreation(payload);
-    
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheet = ss.getSheets()[0];
+    var lastRow = sheet.getLastRow();
+
+    // Verificar si hay datos (mínimo fila 2 para tener al menos un registro)
+    if (lastRow < 2) return createJsonResponse({ success: true, data: [] });
+
+    // Determinar número de columnas según el tipo
+    var numCols = isEmployees ? 5 : 15;
+
+    // Leer desde fila 2 hasta la última fila
+    var rows = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+
+    // Filtrar filas vacías y formatear fechas
+    var formattedData = rows
+      .filter(function (row) {
+        // Para empleados: verificar que tenga nombre (col 1)
+        if (isEmployees) return row[1];
+        // Para decretos: verificar columnas clave
+        return row[0] || row[1] || row[4];
+      })
+      .map(function (row) {
+        return row.map(function (cell) {
+          if (cell instanceof Date) return Utilities.formatDate(cell, Session.getScriptTimeZone(), "yyyy-MM-dd");
+          return cell;
+        });
+      });
+
+    return createJsonResponse({ success: true, data: formattedData });
   } catch (err) {
-    return createJsonResponse({ 
-      success: false, 
-      error: "Error crítico en motor GAS: " + err.toString() 
-    });
+    return createJsonResponse({ success: false, error: "Error de lectura: " + err.toString() });
   }
 }
 
-/**
- * Maneja las peticiones OPTIONS para CORS (opcional, pero ayuda en navegadores modernos)
- */
-function doOptions(e) {
-  return createJsonResponse({ success: true });
+function doPost(e) {
+  try {
+    var payload = JSON.parse(e.postData.contents);
+    if (payload.sheetId) return handleSpreadsheetSync(payload);
+    return handleDocumentCreation(payload);
+  } catch (err) {
+    return createJsonResponse({ success: false, error: "Error POST: " + err.toString() });
+  }
 }
 
-/**
- * Procesa la creación del documento y el reemplazo de etiquetas.
- */
+function handleSpreadsheetSync(payload) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    var ss = SpreadsheetApp.openById(payload.sheetId);
+    var sheet = ss.getSheets()[0];
+    var lastRow = sheet.getLastRow();
+
+    // Detectar tipo de sheet por el payload
+    var isEmployees = payload.type === 'employees';
+    var numCols = isEmployees ? 5 : 15;
+
+    // Limpiar datos desde fila 2 (preservar encabezado en fila 1)
+    if (lastRow >= 2) {
+      sheet.getRange(2, 1, lastRow - 1, numCols).clearContent();
+    }
+
+    // Escribir nuevos datos desde fila 2
+    if (payload.data && payload.data.length > 0) {
+      sheet.getRange(2, 1, payload.data.length, payload.data[0].length).setValues(payload.data);
+    }
+
+    SpreadsheetApp.flush();
+    lock.releaseLock();
+    return createJsonResponse({ success: true, message: "Sincronizado" });
+  } catch (error) {
+    if (lock.hasLock()) lock.releaseLock();
+    return createJsonResponse({ success: false, error: error.toString() });
+  }
+}
+
 function handleDocumentCreation(data) {
   try {
-    var template = DriveApp.getFileById(TEMPLATE_DOC_ID);
-    var folder = DriveApp.getFolderById(FOLDER_DESTINATION_ID);
-    
-    var name = data.fileName || "DOC_SGP_AUTO_" + new Date().getTime();
-    
-    var copy = template.makeCopy(name, folder);
+    // Usamos el servicio estándar DriveApp para evitar configurar servicios avanzados
+    var templateFile = DriveApp.getFileById(TEMPLATE_DOC_ID);
+    var destinationFolder = DriveApp.getFolderById(FOLDER_DESTINATION_ID);
+    var fileName = data.fileName || "DECRETO_" + new Date().getTime();
+
+    // Crear copia
+    var copy = templateFile.makeCopy(fileName, destinationFolder);
     var doc = DocumentApp.openById(copy.getId());
     var body = doc.getBody();
-    
+
+    // Reemplazar campos
     for (var key in data) {
+      if (key === "fileName") continue;
       var val = (data[key] !== undefined && data[key] !== null) ? data[key].toString() : "";
-      
-      // Reemplazo múltiple para mayor compatibilidad de etiquetas
+
+      // Soporta formatos {{campo}} y «campo»
       body.replaceText('«' + key + '»', val);
       body.replaceText('{{' + key + '}}', val);
-      
+
       var keyWithSpaces = key.replace(/_/g, ' ');
       if (key !== keyWithSpaces) {
         body.replaceText('«' + keyWithSpaces + '»', val);
         body.replaceText('{{' + keyWithSpaces + '}}', val);
       }
     }
-    
+
     doc.saveAndClose();
-    copy.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    
-    return createJsonResponse({ 
-      success: true, 
-      url: copy.getUrl(),
+
+    // Configurar permisos de visualización
+    var file = DriveApp.getFileById(copy.getId());
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    return createJsonResponse({
+      success: true,
+      url: file.getUrl(),
       id: copy.getId()
     });
-
   } catch (e) {
-    return createJsonResponse({ success: false, error: "Error en Docs/Drive: " + e.toString() });
+    return createJsonResponse({ success: false, error: "Fallo en motor Drive: " + e.toString() });
   }
 }
 
-/**
- * Sincroniza los datos con la planilla de Google Sheets de manera segura.
- */
-function handleSpreadsheetSync(payload) {
-  try {
-    var ss = SpreadsheetApp.openById(payload.sheetId);
-    var sheet = ss.getSheets()[0];
-    
-    // Bloqueamos el script para evitar colisiones si varios usuarios guardan a la vez
-    var lock = LockService.getScriptLock();
-    lock.waitLock(10000); // espera hasta 10 segundos
-    
-    sheet.clearContents();
-    var headers = ["ID", "Tipo", "Materia", "Acto", "Funcionario", "RUT", "Periodo", "Días", "Inicio", "Jornada", "Haber", "Fecha", "Saldo", "RA", "Emite"];
-    
-    sheet.getRange(1, 1, 1, headers.length)
-      .setValues([headers])
-      .setFontWeight("bold")
-      .setBackground("#f1f5f9");
-
-    if (payload.data && payload.data.length > 0) {
-      sheet.getRange(2, 1, payload.data.length, payload.data[0].length)
-        .setValues(payload.data);
-    }
-    
-    sheet.autoResizeColumns(1, headers.length);
-    
-    SpreadsheetApp.flush();
-    lock.releaseLock();
-    
-    return createJsonResponse({ success: true, message: "Sincronización completa" });
-    
-  } catch (e) {
-    return createJsonResponse({ success: false, error: "Error en Motor Sheets: " + e.toString() });
-  }
-}
-
-/**
- * Genera la respuesta en formato JSON con cabeceras CORS básicas.
- */
 function createJsonResponse(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * IMPORTANTE: Ejecuta esta función una vez en el editor de Apps Script 
+ * para autorizar los permisos de Drive y DocumentApp.
+ */
+function AUTORIZAR_CON_UN_CLIC() {
+  DriveApp.getFileById(TEMPLATE_DOC_ID);
+  DocumentApp.openById(TEMPLATE_DOC_ID);
+  Logger.log("✅ Autorización optimizada completada con éxito");
 }

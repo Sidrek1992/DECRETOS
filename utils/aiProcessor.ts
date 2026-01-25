@@ -7,25 +7,30 @@ import { PermitFormData } from "../types";
  * 1. Uso de process.env.API_KEY exclusivamente.
  * 2. Estructura de parámetros nombrados.
  */
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const apiKey = process.env.API_KEY || "";
+const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
 /**
  * Utiliza Gemini 3 Flash para analizar una solicitud de permiso administrativo o feriado
  * y extraer los datos estructurados necesarios para generar el decreto.
  */
 export const extractDataFromPdf = async (base64Pdf: string): Promise<Partial<PermitFormData>> => {
+  if (!ai) {
+    console.error("Gemini API Key no configurada.");
+    return {};
+  }
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-1.5-flash',
       contents: [{
         parts: [
-          { 
-            inlineData: { 
-              mimeType: 'application/pdf', 
-              data: base64Pdf 
-            } 
+          {
+            inlineData: {
+              mimeType: 'application/pdf',
+              data: base64Pdf
+            }
           },
-          { 
+          {
             text: `Actúa como un experto administrativo. Analiza esta SOLICITUD DE PERMISO O FERIADO. 
             Extrae con precisión los siguientes campos del documento:
             - funcionario: Nombre completo del solicitante.
@@ -35,7 +40,7 @@ export const extractDataFromPdf = async (base64Pdf: string): Promise<Partial<Per
             - fechaInicio: Fecha de inicio del permiso en formato YYYY-MM-DD.
             - tipoJornada: Identifica si es '(Jornada completa)', '(Jornada mañana)', o '(Jornada tarde)'.
             
-            Responde estrictamente en formato JSON siguiendo el esquema proporcionado.` 
+            Responde estrictamente en formato JSON siguiendo el esquema proporcionado.`
           }
         ]
       }],
@@ -44,27 +49,27 @@ export const extractDataFromPdf = async (base64Pdf: string): Promise<Partial<Per
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            solicitudType: { 
+            solicitudType: {
               type: Type.STRING,
               description: "Tipo de solicitud: PA o FL"
             },
-            funcionario: { 
+            funcionario: {
               type: Type.STRING,
               description: "Nombre completo del funcionario"
             },
-            rut: { 
+            rut: {
               type: Type.STRING,
               description: "RUT del funcionario"
             },
-            cantidadDias: { 
+            cantidadDias: {
               type: Type.NUMBER,
               description: "Días solicitados"
             },
-            fechaInicio: { 
+            fechaInicio: {
               type: Type.STRING,
               description: "Fecha de inicio del permiso"
             },
-            tipoJornada: { 
+            tipoJornada: {
               type: Type.STRING,
               description: "Detalle de la jornada elegida"
             }
@@ -82,10 +87,10 @@ export const extractDataFromPdf = async (base64Pdf: string): Promise<Partial<Per
       console.warn("La IA no devolvió texto en la respuesta.");
       return {};
     }
-    
+
     return JSON.parse(textOutput.trim());
-  } catch (err) { 
+  } catch (err) {
     console.error("Error crítico en el procesamiento de IA:", err);
-    return {}; 
+    return {};
   }
 };
