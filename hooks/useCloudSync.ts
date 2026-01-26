@@ -73,25 +73,12 @@ export const useCloudSync = (
         };
     }, []);
 
-    // Cargar datos iniciales
+    // Cargar datos iniciales desde la nube
     useEffect(() => {
-        const saved = localStorage.getItem('sgp_cloud_records_v2');
-        if (saved) {
-            try {
-                setRecords(JSON.parse(saved));
-            } catch {
-                setRecords([]);
-            }
-        }
         fetchFromCloud();
     }, []);
 
-    // Guardar en localStorage cuando cambian los records
-    useEffect(() => {
-        if (records.length > 0) {
-            localStorage.setItem('sgp_cloud_records_v2', JSON.stringify(records));
-        }
-    }, [records]);
+
 
     const fetchFromCloud = useCallback(async () => {
         if (!navigator.onLine) return;
@@ -131,10 +118,7 @@ export const useCloudSync = (
                         decreto: ''
                     }));
 
-                if (cloudRecords.length > 0) {
-                    setRecords(cloudRecords);
-                    localStorage.setItem('sgp_cloud_records_v2', JSON.stringify(cloudRecords));
-                }
+                setRecords(cloudRecords);
                 setLastSync(new Date());
                 onSyncSuccess?.();
             }

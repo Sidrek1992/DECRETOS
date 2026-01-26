@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Employee } from '../types';
 import { CONFIG } from '../config';
-import { INITIAL_EMPLOYEES } from '../data/initialEmployees';
 
 interface UseEmployeeSyncReturn {
     employees: Employee[];
@@ -19,29 +18,13 @@ export const useEmployeeSync = (
     onSyncSuccess?: () => void,
     onSyncError?: (error: string) => void
 ): UseEmployeeSyncReturn => {
-    const [employees, setEmployees] = useState<Employee[]>(() => {
-        // Intentar cargar desde localStorage primero
-        const saved = localStorage.getItem('sgp_employees_v2');
-        if (saved) {
-            try {
-                return JSON.parse(saved);
-            } catch {
-                return INITIAL_EMPLOYEES;
-            }
-        }
-        return INITIAL_EMPLOYEES;
-    });
+    const [employees, setEmployees] = useState<Employee[]>([]);
 
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncError, setSyncError] = useState(false);
     const [lastSync, setLastSync] = useState<Date | null>(null);
 
-    // Guardar en localStorage cuando cambian los employees
-    useEffect(() => {
-        if (employees.length > 0) {
-            localStorage.setItem('sgp_employees_v2', JSON.stringify(employees));
-        }
-    }, [employees]);
+
 
     // Cargar empleados desde el Sheet al iniciar
     useEffect(() => {
@@ -85,12 +68,9 @@ export const useEmployeeSync = (
                     })
                     .filter((emp: Employee) => emp.nombre && emp.rut); // Filtrar registros incompletos
 
-                if (cloudEmployees.length > 0) {
-                    // Ordenar alfabéticamente
-                    cloudEmployees.sort((a, b) => a.nombre.localeCompare(b.nombre));
-                    setEmployees(cloudEmployees);
-                    localStorage.setItem('sgp_employees_v2', JSON.stringify(cloudEmployees));
-                }
+                // Ordenar alfabéticamente
+                cloudEmployees.sort((a, b) => a.nombre.localeCompare(b.nombre));
+                setEmployees(cloudEmployees);
                 setLastSync(new Date());
                 onSyncSuccess?.();
             }
